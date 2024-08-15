@@ -1,0 +1,596 @@
+---
+title: "Meta-analysis of RNA Data on Rice under Heat Stress"
+author: "Benjamin Joshua"
+date: "2024-05-23"
+output: html_document
+---
+```{r}
+#Packages to install
+
+install.packages("tidyverse")
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("edgeR")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("rhdf5")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("tximport")
+
+#Installing packages
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GSEABase")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("Biobase")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GSVA")
+
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GO.db")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("AnnotationDbi")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("AnnotationHub")
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("clusterProfiler")
+
+install.packages("blogdown")
+
+
+```
+
+```{r}
+#Libraries to load
+library(rhdf5)
+library(tidyverse) 
+library(tximport) 
+library(beepr)
+library(datapasta) 
+library(data.table)
+library(ape)
+library(reshape2)
+```
+
+
+```{r}
+?getwd
+setwd("~/Desktop/DEG Learning/read_Mapping")
+targets <-read_tsv("master_table.txt", col_types = c("cccc"))
+targets
+path <- file.path("~/Desktop/DEG Learning/read_Mapping", paste0("Mapping_output_", targets$sra_run_id), "abundance.tsv")
+path
+all(file.exists(path)) 
+file.exists(path)
+which(file.exists(path)) 
+```
+
+```{r}
+Tx2 <- read.gff("Oryza_sativa.IRGSP-1.0.59.gff3", GFF3 = TRUE)
+head(Tx2)
+Tx3 <- subset(Tx2, type=="mRNA")
+Tx4 <- Tx3 %>% mutate(colsplit(Tx3$attributes, ";", c("attri1", "attri2", "attri3", "attri4")))
+Tx4$attri1 <- gsub("ID=transcript:", "", Tx4$attri1)
+Tx4 <- Tx4[ , c("type", "attri1")]
+Tx4$type <- gsub("mRNA", "gene", Tx4$type)
+colnames(Tx4)<-c("geneID", "target_id")
+Tx<- Tx4
+Tx <- as_tibble(Tx)
+Tx <- dplyr::select(Tx, "target_id", "geneID")
+Tx1 <- Tx %>% 
+  mutate(geneID=target_id)
+```
+
+
+```{r}
+Tx1a <- read.delim("~/Desktop/DEG Learning/read_Mapping/Tx1a.txt")
+View(Tx1a)
+
+```
+
+
+```{r}
+Txi_gene <- tximport(path, 
+                     type = "kallisto", 
+                     tx2gene = Tx1a, 
+                     txOut = FALSE,
+                     countsFromAbundance = "lengthScaledTPM",
+                     ignoreTxVersion = TRUE)
+
+class(Txi_gene)
+names(Txi_gene)
+```
+
+```{r}
+library(tidyverse)
+library(edgeR)
+library(matrixStats)
+library(cowplot)
+
+
+myTPM <- Txi_gene$abundance
+myCounts <- Txi_gene$counts
+colSums(myTPM)
+colSums(myCounts)
+```
+
+```{r}
+targets
+sampleLabels <- targets$Sample
+```
+
+```{r}
+myTPM.stats <- transform(myTPM, 
+                         SD=rowSds(myTPM), 
+                         AVG=rowMeans(myTPM),
+                         MED=rowMedians(myTPM))
+
+head(myTPM.stats)
+```
+
+```{r}
+ggplot(myTPM.stats) + 
+  aes(x = SD, y = MED) +
+  geom_point(shape=16, size=2) +
+  geom_smooth(method=lm) +
+  labs(y="Median", x = "Standard deviation",
+       title="Transcripts per million (TPM)",
+       subtitle="unfiltered, non-normalized data",
+       caption="Metaanalysis_Data_Rice") +
+  theme_classic()
+```
+
+```{r}
+myDGEList <- DGEList(myCounts)
+myDGEList
+save(myDGEList, file = "myDGEList")
+load(file = "myDGEList")
+
+cpm <- edgeR::cpm(myDGEList) 
+colSums(cpm)
+log2.cpm <- edgeR::cpm(myDGEList, log=TRUE)
+log2.cpm.df <- as_tibble(log2.cpm, rownames = "geneID")
+log2.cpm.df
+colnames(log2.cpm.df) <- c("geneID", sampleLabels)
+
+
+log2.cpm.df.pivot <- pivot_longer(log2.cpm.df,
+                                  cols = SRX4615967:SRX2977732,
+                                  names_to = "samples",
+                                  values_to = "expression") 
+
+log2.cpm.df.pivot
+```
+
+
+```{r plot-wider, fig.width=4, fig.height=8}
+p1<- ggplot(log2.cpm.df.pivot) +
+  aes(x=samples, y=expression, fill=samples) +
+  geom_violin(trim = FALSE, show.legend = FALSE) +
+  stat_summary(fun = "median", 
+               geom = "point", 
+               shape = 95, 
+               size = 10, 
+               color = "black", 
+               show.legend = FALSE) +
+  labs(y="log2 expression", x = "sample",
+       title="Log2 Counts per Million (CPM)",
+       subtitle="unfiltered, non-normalized",
+       caption=paste0("produced on ", Sys.time())) +
+  theme_bw()+
+  coord_flip()
+
+p1
+```
+
+
+```{r}
+#Filtering the dataset
+
+keepers <- rowSums(cpm>1)>=32
+myDGEList.filtered <- myDGEList[keepers,]
+dim(myDGEList.filtered)
+
+
+log2.cpm.filtered <- edgeR::cpm(myDGEList.filtered, log=TRUE)
+log2.cpm.filtered.df <- as_tibble(log2.cpm.filtered, rownames = "geneID")
+colnames(log2.cpm.filtered.df) <- c("geneID", sampleLabels)
+
+
+log2.cpm.filtered.df.pivot <- pivot_longer(log2.cpm.filtered.df,
+                                           cols = -1,
+                                           names_to = "samples",
+                                           values_to = "expression")
+
+log2.cpm.filtered.df.pivot
+
+```
+
+
+```{r plot-wider, fig.width=4, fig.height=8}
+
+p2<- ggplot(log2.cpm.filtered.df.pivot) +
+  aes(x=samples, y=expression, fill=samples) +
+  geom_violin(trim = FALSE, show.legend = FALSE) +
+  stat_summary(fun = "median", 
+               geom = "point", 
+               shape = 95, 
+               size = 10, 
+               color = "black", 
+               show.legend = FALSE) +
+  labs(y="log2 expression", x = "sample",
+       title="Log2 Counts per Million (CPM)",
+       subtitle="filtered, non-normalized",
+       caption=paste0("produced on ", Sys.time())) +
+  theme_bw()+
+  coord_flip()
+p2
+
+```
+
+```{r}
+#Normalizing the data
+
+myDGEList.filtered.norm <- calcNormFactors(myDGEList.filtered, method = "TMM")
+log2.cpm.filtered.norm <- cpm(myDGEList.filtered.norm, log=TRUE)
+log2.cpm.filtered.norm.df <- as_tibble(log2.cpm.filtered.norm, rownames = "geneID")
+colnames(log2.cpm.filtered.norm.df) <- c("geneID", sampleLabels)
+
+
+log2.cpm.filtered.norm.df.pivot <- pivot_longer(log2.cpm.filtered.norm.df,
+                                                cols = -1,
+                                                names_to = "samples",
+                                                values_to = "expression")
+
+```
+
+
+```{r plot-wider, fig.width=4, fig.height=8}
+p3<- ggplot(log2.cpm.filtered.norm.df.pivot) +
+  aes(x=samples, y=expression, fill=samples) +
+  geom_violin(trim = FALSE, show.legend = FALSE) +
+  stat_summary(fun = "median", 
+               geom = "point", 
+               shape = 95, 
+               size = 10, 
+               color = "black", 
+               show.legend = FALSE) +
+  labs(y="log2 expression", x = "sample",
+       title="Log2 Counts per Million (CPM)",
+       subtitle="filtered, TMM normalized",
+       caption=paste0("produced on ", Sys.time())) +
+  theme_bw()+
+  coord_flip()
+
+p3
+```
+
+
+```{r}
+#Plotting PCA
+
+library(tidyverse)
+library(DT)
+library(plotly)
+library(gt) 
+
+targets
+treatment <- targets$Treatment
+treatment <- factor(treatment)
+log2.cpm.filtered.norm.df
+distance <- dist(t(log2.cpm.filtered.norm), method = "maximum") 
+clusters <- hclust(distance, method = "average") 
+plot(clusters, labels=sampleLabels)
+
+pca.res <- prcomp(t(log2.cpm.filtered.norm), scale.=F, retx=T)
+
+pca.res <- prcomp(t(log2.cpm.filtered.norm), scale.=F, retx=T)
+ls(pca.res)
+summary(pca.res)
+pca.res$rotation 
+pca.res$x 
+screeplot(pca.res) 
+pc.var<-pca.res$sdev^2 
+pc.per<-round(pc.var/sum(pc.var)*100, 1) 
+pc.per
+
+
+```
+
+
+
+```{r}
+pca.res.df <- as_tibble(pca.res$x)
+p4<- ggplot(pca.res.df) +
+  aes(x=PC1, y=PC2, label=sampleLabels, color=treatment) +
+  geom_point(size=4) +
+  # geom_label() +
+  # stat_ellipse() +
+  xlab(paste0("PC1 (",pc.per[1],"%",")")) + 
+  ylab(paste0("PC2 (",pc.per[2],"%",")")) +
+  labs(title="PCA plot",
+       caption=paste0("produced on ", Sys.time())) +
+  coord_fixed() +
+  theme_bw()
+
+p4
+
+pca.res.df <- pca.res$x[,1:4] %>% 
+  as_tibble() %>%
+  add_column(sample = sampleLabels,
+             treatment = treatment)
+
+pca.pivot <- pivot_longer(pca.res.df, 
+                          cols = PC1:PC4, 
+                          names_to = "PC", 
+                          values_to = "loadings") 
+
+```
+
+
+```{r plot-wider, fig.width=4, fig.height=8}
+p5<- ggplot(pca.pivot) +
+  aes(x=sample, y=loadings, fill=treatment) + 
+  geom_bar(stat="identity") +
+  facet_wrap(~PC) +
+  labs(title="PCA 'small multiples' plot",
+       caption=paste0("produced on ", Sys.time())) +
+  theme_bw() +
+  coord_flip()
+
+p5
+```
+
+
+
+```{r}
+#Visualizing the normalized filtered data
+
+mydata.df <- log2.cpm.filtered.norm.df %>% 
+  mutate(control.AVG = (SRX4615967 + SRX4615966 + SRX4615965 + SRX4615961 + SRX4615960 + SRX4615959 
+                        + SRX2977713 + SRX2977714 + SRX2977715 + SRX2977716 + SRX2977717 
+                        + SRX2977718 + SRX2977719 + SRX2977720 + SRX2977721 + SRX2977722)/16,
+         heat_treated.AVG = (SRX4615970 + SRX4615969 + SRX4615968 + SRX4615964 + SRX4615963 
+                        + SRX4615962 + SRX2977723 + SRX2977724 + SRX2977725 + SRX2977726
+                        + SRX2977727 + SRX2977728 + SRX2977729 + SRX2977730 + SRX2977731
+                        + SRX2977732)/16,
+         LogFC = (heat_treated.AVG - control.AVG)) %>% 
+  mutate_if(is.numeric, round, 2)
+
+
+mydata.df
+mydata.sort <- mydata.df %>%
+  dplyr::arrange(desc(LogFC)) %>% 
+  dplyr::select(geneID, LogFC)
+
+myplot <- ggplot(mydata.df) + 
+  aes(x=control.AVG, y=heat_treated.AVG,
+      text = paste("Symbol:", geneID)) +
+  geom_point(shape=16, size=1) +
+  ggtitle("control vs. heat_treated") +
+  theme_bw()
+
+ggplotly(myplot)
+```
+
+
+
+```{r}
+treatment<- factor(targets$Treatment)
+design <- model.matrix(~0 + treatment)
+colnames(design) <- levels(treatment)
+
+```
+
+
+
+```{r}
+v.DEGList.filtered.norm <- voom(myDGEList.filtered.norm, design, plot = TRUE)
+fit <- lmFit(v.DEGList.filtered.norm, design)
+contrast.matrix <- makeContrasts(Treatment = Heat - Control,
+                                 levels=design)
+fits <- contrasts.fit(fit, contrast.matrix)
+ebFit <- eBayes(fits)
+myTopHits <- topTable(ebFit, adjust ="BH", coef=1, number=42584, sort.by="logFC")
+myTopHits.df <- myTopHits %>%
+  as_tibble(rownames = "geneID")
+gt(myTopHits.df)
+
+```
+
+
+```{r}
+vplot <- ggplot(myTopHits.df) +
+  aes(y=-log10(adj.P.Val), x=logFC, text = paste("Symbol:", geneID)) +
+  geom_point(size=2) +
+  geom_hline(yintercept = -log10(0.01), linetype="longdash", colour="grey", linewidth=1) +
+  geom_vline(xintercept = 1, linetype="longdash", colour="#BE684D", linewidth=1) +
+  geom_vline(xintercept = -1, linetype="longdash", colour="#2C467A", linewidth=1) +
+   annotate("rect", xmin = 1, xmax = 12, ymin = -log10(0.01), ymax = 7.5, alpha=.2, fill="#BE684D") +
+  annotate("rect", xmin = -1, xmax = -12, ymin = -log10(0.01), ymax = 7.5, alpha=.2, fill="#2C467A") +
+  labs(title="Volcano plot",
+       subtitle = "Differential Analysis of Heat-induced genes",
+       caption=paste0("produced on ", Sys.time())) +
+  theme_bw()
+
+ggplotly(vplot)
+
+```
+
+
+```{r}
+results <- decideTests(ebFit, method="global", adjust.method="BH", p.value=0.01, lfc=2)
+head(results)
+summary(results)
+vennDiagram(results, include="up")
+```
+
+
+```{r}
+colnames(v.DEGList.filtered.norm$E) <- sampleLabels
+diffGenes <- v.DEGList.filtered.norm$E[results[,1] !=0,]
+
+diffGenes.df <- as_tibble(diffGenes, rownames = "geneID")
+datatable(diffGenes.df,
+          extensions = c('KeyTable', "FixedHeader"),
+          caption = 'Table 1: DEGs in cutaneous leishmaniasis',
+          options = list(keys = TRUE, searchHighlight = TRUE, pageLength = 10, lengthMenu = c("10", "25", "50", "100"))) %>%
+  formatRound(columns=c(2:11), digits=2)
+```
+
+
+```{r}
+#Creating modules for enrichment analysis
+
+library(tidyverse)
+library(limma) 
+library(RColorBrewer) 
+library(gplots) #the heatmap2 function 
+
+```
+
+```{r}
+myheatcolors <- rev(brewer.pal(name="RdBu", n=11))
+clustRows <- hclust(as.dist(1-cor(t(diffGenes), method="pearson")), method="complete") #cluster rows by pearson correlation
+
+
+clustColumns <- hclust(as.dist(1-cor(diffGenes, method="spearman")), method="complete")
+
+module.assign <- cutree(clustRows, k=2)
+module.color <- rainbow(length(unique(module.assign)), start=0.1, end=0.9) 
+module.color <- module.color[as.vector(module.assign)]
+```
+
+
+```{r}
+heatmap.2(diffGenes, 
+          Rowv=as.dendrogram(clustRows), 
+          Colv=as.dendrogram(clustColumns),
+          RowSideColors=module.color,
+          col=myheatcolors, scale='row', labRow=NA,
+          density.info="none", trace="none",  
+          cexRow=1, cexCol=1, margins=c(4,20))
+```
+
+
+```{r}
+modulePick <- 2 
+myModule_up <- diffGenes[names(module.assign[module.assign %in% modulePick]),] 
+hrsub_up <- hclust(as.dist(1-cor(t(myModule_up), method="pearson")), method="complete") 
+
+heatmap.2(myModule_up, 
+          Rowv=as.dendrogram(hrsub_up), 
+          #Colv=as.dendrogram(clustColumns), 
+          labRow = NA,
+          col=myheatcolors, scale="row", 
+          density.info="none", trace="none", 
+          RowSideColors=module.color[module.assign%in%modulePick], margins=c(8,20))
+```
+
+
+```{r}
+modulePick <- 1 
+myModule_down <- diffGenes[names(module.assign[module.assign %in% modulePick]),] 
+hrsub_down <- hclust(as.dist(1-cor(t(myModule_down), method="pearson")), method="complete") 
+
+heatmap.2(myModule_down, 
+          Rowv=as.dendrogram(hrsub_down), 
+          #Colv=as.dendrogram(clustColumns), 
+          labRow = NA,
+          col=myheatcolors, scale="row", 
+          density.info="none", trace="none", 
+          RowSideColors=module.color[module.assign%in%modulePick], margins=c(8,20))
+
+myModule <- diffGenes[names(module.assign[module.assign %in% modulePick]),] 
+```
+
+
+```{r}
+#Enrichment analysis 1
+
+library(tidyverse)
+library(limma)
+library(gplots) 
+library(GSEABase) 
+library(Biobase) 
+library(GSVA)
+library(gmt)
+library(GO.db)
+library(dplyr)
+
+```
+
+
+```{r}
+library(AnnotationDbi)
+library(AnnotationHub)
+```
+
+
+```{r}
+hub<- AnnotationHub()
+```
+
+
+```{r}
+query(hub, c("Oryza sativa", "orgdb"))
+
+rice<- hub[["AH114586"]]
+```
+
+
+```{r}
+
+#Enrichment analysis 2
+
+#Using gprofiler2
+
+library(gt)
+library(DT)
+library(plotly)
+library(gprofiler2)
+library(clusterProfiler)
+
+#Using myTopHits
+
+myTopHits <- topTable(ebFit, adjust ="BH", coef=1, number=50, sort.by="logFC")
+gost.res <- gost(rownames(myTopHits), organism = "osativa", correction_method = "fdr")
+
+mygostplot1<- gostplot(gost.res, interactive = TRUE, capped = TRUE)
+mygostplot1
+
+mygostplot2 <- gostplot(gost.res, interactive = FALSE, capped = TRUE)
+
+publish_gostplot(mygostplot2,
+  highlight_terms = c("GO:0031072", "GO:0009408", "GO:0009266", "GO:0034605", "GO:0000302", "GO:0042542","GO:0009628", "GO:0006950", "GO:0006807","GO:0010467","GO:0050896","GO:0044249","GO:0051716", "GO:0006970",
+  filename = NULL,
+  width = NA,
+  height = NA))
+
+```
